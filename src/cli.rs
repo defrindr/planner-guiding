@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use sqlx::Row;
 
 use crate::{application, config::Config, db, http, repository};
 
@@ -72,19 +71,16 @@ async fn import_products(config: &Config, path: &str) -> Result<()> {
         if fields.len() < 4 {
             continue;
         }
-        let exists = sqlx::query("SELECT id FROM products WHERE sku=$1")
-            .bind(fields[0])
-            .fetch_optional(&pool)
-            .await?
-            .is_some();
+        let exists = repository::products::exists_by_sku(&pool, fields[0]).await?;
         if !exists {
-            sqlx::query("INSERT INTO products(sku,name,price,stock) VALUES($1,$2,$3,$4)")
-                .bind(fields[0])
-                .bind(fields[1])
-                .bind(fields[2].parse::<f64>().unwrap_or(0.0))
-                .bind(fields[3].parse::<i32>().unwrap_or(0))
-                .execute(&pool)
-                .await?;
+            repository::products::insert(
+                &pool,
+                fields[0],
+                fields[1],
+                fields[2].parse::<f64>().unwrap_or(0.0),
+                fields[3].parse::<i32>().unwrap_or(0),
+            )
+            .await?;
             count += 1;
         }
     }
@@ -95,17 +91,12 @@ async fn import_products(config: &Config, path: &str) -> Result<()> {
 async fn export_sales(config: &Config, path: &str) -> Result<()> {
     let pool = db::connect(config).await?;
     db::migrate(&pool).await?;
-    let rows = sqlx::query("SELECT order_no,status,total,created_at FROM orders ORDER BY id")
-        .fetch_all(&pool)
-        .await?;
+    let rows = repository::orders::all_for_export(&pool).await?;
     let mut out = String::from("order_no,status,total,created_at\n");
     for row in rows {
         out.push_str(&format!(
             "{},{},{},{}\n",
-            row.get::<i32, _>("order_no"),
-            row.get::<String, _>("status"),
-            row.get::<f64, _>("total"),
-            row.get::<chrono::NaiveDateTime, _>("created_at")
+            row.order_no, row.status, row.total, row.created_at
         ));
     }
     std::fs::write(path, out)?;

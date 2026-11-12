@@ -16,9 +16,7 @@ pub struct ApiRequest {
     pub method: HttpMethod,
     pub path: String,
     pub query: BTreeMap<String, String>,
-    pub headers: HeaderMap,
     pub body: Value,
-    pub raw_body: Option<Vec<u8>>,
     pub bearer: Option<String>,
 }
 
@@ -40,4 +38,5 @@ pub type ApiFuture = Pin<Box<dyn Future<Output = Result<ApiResponse, super::ApiE
 /// in the core because only the core can load the user.
 pub trait HttpCore: Send + Sync + 'static {
     fn dispatch(&self, request: ApiRequest) -> ApiFuture;
+    fn bank_secret(&self) -> &str;
 }

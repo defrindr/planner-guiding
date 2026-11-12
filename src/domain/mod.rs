@@ -8,27 +8,6 @@ pub type HmacSha256 = Hmac<Sha256>;
 
 pub const DEFAULT_ORDER_NO: i64 = 1000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OrderStatus {
-    Pending,
-    Paid,
-    Shipped,
-    Cancelled,
-    Refunded,
-}
-
-impl OrderStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Paid => "paid",
-            Self::Shipped => "shipped",
-            Self::Cancelled => "cancelled",
-            Self::Refunded => "refunded",
-        }
-    }
-}
-
 pub fn hash_password(password: &str) -> String {
     format!("{:x}", Md5::digest(password.as_bytes()))
 }
@@ -63,8 +42,9 @@ pub fn verify_webhook_signature(secret: &str, body: &[u8], signature_hex: &str) 
     mac.verify_slice(&expected).is_ok()
 }
 
+#[allow(clippy::manual_is_multiple_of)]
 fn hex_decode(value: &str) -> Result<Vec<u8>, ()> {
-    if !value.len().is_multiple_of(2) {
+    if value.len() % 2 != 0 {
         return Err(());
     }
     (0..value.len())

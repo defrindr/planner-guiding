@@ -8,9 +8,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
-use sha2::Sha256;
 
 use super::{
     error::{ApiError, ApiResult},
@@ -52,11 +50,24 @@ pub fn router<C: HttpCore>(core: HttpState<C>) -> Router {
         .route("/api/admin/users/:id/role", post(set_role::<C>))
         .route("/api/admin/orders/:id/status", post(set_order_status::<C>))
         .route("/api/webhooks/bank", post(bank_webhook::<C>))
+        .fallback(not_found)
+        .method_not_allowed_fallback(method_not_allowed)
         .with_state(core)
 }
 
 async fn health() -> Json<Value> {
     Json(json!({"status":"ok"}))
+}
+
+async fn not_found() -> ApiError {
+    ApiError::new(axum::http::StatusCode::NOT_FOUND, "not found")
+}
+
+async fn method_not_allowed() -> ApiError {
+    ApiError::new(
+        axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        "method not allowed",
+    )
 }
 
 fn protected(path: &str) -> bool {
@@ -112,9 +123,7 @@ async fn dispatch<C: HttpCore>(
             method,
             path,
             query,
-            headers,
             body,
-            raw_body: None,
             bearer: token,
         })
         .await;
@@ -168,7 +177,7 @@ macro_rules! json_handler {
 macro_rules! json_id_handler {
     ($name:ident, $method:ident, $path:expr) => {
         async fn $name<C: HttpCore>(
-            Path(id): Path<u64>,
+            Path(id): Path<String>,
             State(state): State<HttpState<C>>,
             Query(query): Query<BTreeMap<String, String>>,
             headers: HeaderMap,
@@ -221,17 +230,11 @@ async fn bank_webhook<C: HttpCore>(
     headers: HeaderMap,
     bytes: Bytes,
 ) -> Response {
-    let secret = std::env::var("BANK_SECRET").unwrap_or_else(|_| "bank-shared-secret-2019".into());
+    let secret = state.bank_secret();
     let Some(signature) = headers.get("x-signature").and_then(|v| v.to_str().ok()) else {
         return ApiError::bad_signature().into_response();
     };
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key");
-    mac.update(&bytes);
-    let supplied = match decode_hex(signature) {
-        Some(v) => v,
-        None => return ApiError::bad_signature().into_response(),
-    };
-    if mac.verify_slice(&supplied).is_err() {
+    if !crate::domain::verify_webhook_signature(secret, &bytes, signature) {
         return ApiError::bad_signature().into_response();
     }
     let body = match serde_json::from_slice(&bytes) {
@@ -242,25 +245,13 @@ async fn bank_webhook<C: HttpCore>(
         method: HttpMethod::Post,
         path: "/api/webhooks/bank".into(),
         query: BTreeMap::new(),
-        headers,
         body,
-        raw_body: Some(bytes.to_vec()),
         bearer: None,
     };
     match state.dispatch(request).await {
         Ok(v) => v.into_response(),
         Err(e) => e.into_response(),
     }
-}
-
-fn decode_hex(value: &str) -> Option<Vec<u8>> {
-    if !value.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..value.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).ok())
-        .collect()
 }
 
 impl IntoResponse for ApiResponse {

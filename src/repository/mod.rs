@@ -1,12 +1,17 @@
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::Result;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
 
 use crate::{config::Config, domain::hash_password};
 
+pub mod coupons;
+pub mod orders;
+pub mod payments;
 pub mod products;
+pub mod reports;
 pub mod users;
+pub mod wallet;
 pub use users::{authenticate_user, insert_user, user_by_id};
 
 static SESSIONS: OnceLock<Mutex<crate::domain::SessionStore>> = OnceLock::new();
@@ -63,10 +68,4 @@ pub async fn seed(pool: &PgPool, config: &Config) -> Result<()> {
         }
     }
     Ok(())
-}
-
-pub async fn insert_returning_id<'a>(tx: &mut Transaction<'a, Postgres>, sql: &str) -> Result<i32> {
-    Ok(sqlx::query_scalar::<_, i32>(sql)
-        .fetch_one(&mut **tx)
-        .await?)
 }
