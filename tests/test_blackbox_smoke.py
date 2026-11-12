@@ -108,3 +108,13 @@ def test_admin_boundary_and_bank_idempotency():
     second = requests.post(BANK + "/charge", json=payload, headers={"Idempotency-Key": key}, timeout=TIMEOUT)
     assert first.status_code == second.status_code == 200
     assert first.json()["bank_ref"] == second.json()["bank_ref"]
+
+
+def test_invalid_input_keeps_json_error_contract():
+    malformed = api("POST", "/api/register", data=b"{", headers={"Content-Type": "application/json"})
+    assert malformed.status_code == 400
+    assert isinstance(malformed.json().get("error"), str)
+
+    missing = api("POST", "/api/register", json={})
+    assert missing.status_code == 400
+    assert isinstance(missing.json().get("error"), str)

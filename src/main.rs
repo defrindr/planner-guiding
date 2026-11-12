@@ -1,6 +1,5 @@
 mod application;
 mod config;
-mod core;
 mod db;
 mod domain;
 mod errors;
@@ -114,7 +113,7 @@ async fn main() -> Result<()> {
         Command::Serve => {
             let pool = db::connect(&config).await?;
             db::migrate(&pool).await?;
-            let app = http::router(std::sync::Arc::new(core::ShopCore::new(
+            let app = http::router(std::sync::Arc::new(application::ShopCore::new(
                 pool,
                 config.clone(),
             )));
