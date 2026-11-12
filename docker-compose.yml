@@ -32,6 +32,7 @@ services:
   app:
     build:
       context: .
+    entrypoint: ["/bin/sh", "-c"]
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://shop:shop@db:5432/shop}
       BANK_URL: ${BANK_URL:-http://bank:5001}
@@ -41,7 +42,7 @@ services:
       HOST: 0.0.0.0
       PORT: 8000
       EXPORT_DIR: /tmp/exports
-    command: ["sh", "-c", "shopcore init-db && shopcore seed && exec shopcore serve"]
+    command: ["shopcore init-db && shopcore seed && exec shopcore serve"]
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
