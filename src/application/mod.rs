@@ -1,7 +1,5 @@
 pub mod context;
-pub mod errors;
-pub mod models;
-pub mod service;
+pub mod services;
 
 pub use context::ApplicationContext;
-pub use service::ShopCore;
+pub use services::ShopCore;

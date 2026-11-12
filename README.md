@@ -35,13 +35,12 @@ Quality checks:
 
 ```text
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D clippy::all
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 `rustfmt` is configured in `rustfmt.toml`; `clippy` is installed as the
-standard Rust toolchain component. Existing dead-code warnings are from DTOs
-and compatibility helpers reserved for the remaining application split; they
-do not disable Clippy's correctness lints.
+standard Rust toolchain component. The source tree is expected to build
+without dead-code or lint warnings.
 
 Service production harus listen pada `0.0.0.0:8000`. Compose menyalakan PostgreSQL,
 bank simulator, lalu menjalankan `shopcore init-db`, `shopcore seed`, dan
