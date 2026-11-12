@@ -64,7 +64,7 @@ pub fn verify_webhook_signature(secret: &str, body: &[u8], signature_hex: &str) 
 }
 
 fn hex_decode(value: &str) -> Result<Vec<u8>, ()> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(());
     }
     (0..value.len())

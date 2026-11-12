@@ -444,7 +444,7 @@ impl ShopCore {
                 let _ = self.admin(&req).await?;
                 let f = self
                     .export(
-                        &text(req.body.get("filename")).replace("", ""),
+                        &text(req.body.get("filename")),
                         req.body
                             .get("from")
                             .and_then(Value::as_str)

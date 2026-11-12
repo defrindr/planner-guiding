@@ -31,6 +31,18 @@ docker compose build
 docker compose up
 ```
 
+Quality checks:
+
+```text
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D clippy::all
+```
+
+`rustfmt` is configured in `rustfmt.toml`; `clippy` is installed as the
+standard Rust toolchain component. Existing dead-code warnings are from DTOs
+and compatibility helpers reserved for the remaining application split; they
+do not disable Clippy's correctness lints.
+
 Service production harus listen pada `0.0.0.0:8000`. Compose menyalakan PostgreSQL,
 bank simulator, lalu menjalankan `shopcore init-db`, `shopcore seed`, dan
 `shopcore serve`. Bank simulator tersedia di `http://localhost:5001`.
