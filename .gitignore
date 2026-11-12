@@ -20,6 +20,7 @@ node_modules/
 vendor/
 dist/
 build/
+target/
 coverage/
 .cache/
 .pytest_cache/
@@ -38,4 +39,7 @@ data/*.sqlite3
 
 # Local tooling
 *.local
+
+# old code base
+legacy
 

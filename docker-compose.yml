@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-shop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shop}
+      POSTGRES_DB: ${POSTGRES_DB:-shop}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  bank:
+    build:
+      context: ./bank_sim
+    environment:
+      APP_URL: ${APP_URL:-http://app:8000}
+      BANK_SECRET: ${BANK_SECRET:-bank-shared-secret-2019}
+      BANK_LATENCY_MS: ${BANK_LATENCY_MS:-0}
+      BANK_DROP_RATE: ${BANK_DROP_RATE:-0}
+    ports:
+      - "${BANK_PORT:-5001}:5001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/stats')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build:
+      context: .
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://shop:shop@db:5432/shop}
+      BANK_URL: ${BANK_URL:-http://bank:5001}
+      BANK_SECRET: ${BANK_SECRET:-bank-shared-secret-2019}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      HOST: 0.0.0.0
+      PORT: 8000
+      EXPORT_DIR: /tmp/exports
+    command: ["sh", "-c", "shopcore init-db && shopcore seed && exec shopcore serve"]
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      bank:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:8000/health | grep -q 'ok'"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  postgres-data:

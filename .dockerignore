@@ -1,0 +1,11 @@
+.git
+.gitignore
+.dockerignore
+target
+legacy
+data
+*.log
+.env
+tests
+docs
+MIGRATION_GUIDE.md

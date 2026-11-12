@@ -1,10 +1,13 @@
 # ShopCore Migration
 
-Migrasi service legacy ShopCore ke stack target. Source service dan kontrak API belum tersedia di initial repository ini.
+Migrasi service legacy ShopCore ke Rust. Implementasi membaca kontrak dan behavior
+legacy, tetapi image/runtime final tidak bergantung pada folder `legacy/`.
 
 ## Status
 
-Repository saat ini berisi fondasi project dan panduan migrasi. Setelah source legacy atau spesifikasi kontrak tersedia, tambahkan implementasi di `src/`, test di `tests/`, dan konfigurasi runtime sesuai target language.
+Service Rust sekarang menyediakan API HTTP, persistence PostgreSQL, bank webhook,
+maintenance commands, dan bank simulator. Detail handoff dan keputusan kompatibilitas
+ada di [docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md).
 
 ## Struktur
 
@@ -20,16 +23,46 @@ Repository saat ini berisi fondasi project dan panduan migrasi. Setelah source l
 
 ## Development commands
 
-Command berikut adalah placeholder sampai target language ditentukan:
+Command utama (dijalankan di container Rust):
 
 ```text
-Install: <target-language install command>
-Test:   <target-language test command>
-Build:  <target-language build command>
-Run:    <target-language run command>
+cargo test
+docker compose build
+docker compose up
 ```
 
-Service production harus listen pada `0.0.0.0` dan port dari `PORT` (default `8080`) agar kompatibel dengan clean-container grader.
+Service production harus listen pada `0.0.0.0:8000`. Compose menyalakan PostgreSQL,
+bank simulator, lalu menjalankan `shopcore init-db`, `shopcore seed`, dan
+`shopcore serve`. Bank simulator tersedia di `http://localhost:5001`.
+
+## Container smoke test
+
+Dengan Docker dan Compose tersedia:
+
+```sh
+./scripts/test-compose.sh
+```
+
+Smoke test HTTP dapat dijalankan terhadap deployment yang sudah hidup dengan:
+
+```sh
+python3 -m pip install -r tests/requirements.txt
+BASE_URL=http://localhost:8000 BANK_URL=http://localhost:5001 \
+  python3 -m pytest -q tests/test_blackbox_smoke.py
+```
+
+Konfigurasi utama dapat dioverride lewat environment: `DATABASE_URL`, `BANK_URL`,
+`BANK_SECRET`, `ADMIN_USER`, `ADMIN_PASSWORD`, `APP_PORT`, `BANK_PORT`, dan
+`POSTGRES_*`. Runtime tidak membutuhkan network eksternal setelah image selesai
+dibangun.
+
+## Infrastructure contract
+
+`Dockerfile` mengasumsikan package Rust menghasilkan binary bernama `shopcore` dan
+mendukung subcommand `init-db`, `seed`, serta `serve`. `migrations/` harus tersedia
+di root saat build dan binary harus membaca `DATABASE_URL`, `BANK_URL`, `BANK_SECRET`,
+`HOST`, `PORT`, dan `EXPORT_DIR`. Ini adalah integration requirement untuk agent
+core; infrastructure tidak mengubah `src/` atau migration.
 
 ## Kontribusi perubahan
 
