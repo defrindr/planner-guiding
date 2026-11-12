@@ -1,8 +1,11 @@
+mod application;
 mod config;
 mod core;
 mod db;
 mod domain;
+mod errors;
 mod http;
+mod models;
 mod repository;
 
 use anyhow::Result;
