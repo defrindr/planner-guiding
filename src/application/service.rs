@@ -62,6 +62,15 @@ fn text(v: Option<&Value>) -> String {
     v.and_then(Value::as_str).unwrap_or("").to_string()
 }
 
+fn legacy_datetime(value: Option<chrono::NaiveDateTime>) -> Option<String> {
+    value.map(|value| format!("{} GMT", value.format("%a, %d %b %Y %H:%M:%S")))
+}
+
+fn report_date(value: &str) -> Result<chrono::NaiveDate, ApiError> {
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid date"))
+}
+
 impl ShopCore {
     async fn actor(&self, req: &ApiRequest) -> Result<(i32, Value), ApiError> {
         let token = req.bearer.as_deref().ok_or_else(ApiError::unauthorized)?;
@@ -91,7 +100,7 @@ impl ShopCore {
         let rows=sqlx::query("SELECT i.product_id,i.quantity,i.price,p.sku,p.name FROM order_items i LEFT JOIN products p ON p.id=i.product_id WHERE i.order_id=$1 ORDER BY i.id").bind(oid).fetch_all(&self.context.pool).await.map_err(|_|ApiError::new(StatusCode::INTERNAL_SERVER_ERROR,"database error"))?;
         let items=rows.into_iter().map(|r|json!({"product_id":r.get::<i32,_>("product_id"),"sku":r.get::<Option<String>,_>("sku"),"name":r.get::<Option<String>,_>("name"),"quantity":r.get::<i32,_>("quantity"),"price":r.get::<f64,_>("price")})).collect::<Vec<_>>();
         Ok(
-            json!({"id":o.get::<i32,_>("id"),"order_no":o.get::<i32,_>("order_no"),"user_id":o.get::<i32,_>("user_id"),"status":o.get::<String,_>("status"),"total":o.get::<f64,_>("total"),"paid_amount":o.get::<f64,_>("paid_amount"),"refunded":o.get::<f64,_>("refunded"),"coupon":o.get::<Option<String>,_>("coupon"),"created_at":o.get::<Option<chrono::NaiveDateTime>,_>("created_at"),"items":items}),
+            json!({"id":o.get::<i32,_>("id"),"order_no":o.get::<i32,_>("order_no"),"user_id":o.get::<i32,_>("user_id"),"status":o.get::<String,_>("status"),"total":o.get::<f64,_>("total"),"paid_amount":o.get::<f64,_>("paid_amount"),"refunded":o.get::<f64,_>("refunded"),"coupon":o.get::<Option<String>,_>("coupon"),"created_at":legacy_datetime(o.get::<Option<chrono::NaiveDateTime>,_>("created_at")),"items":items}),
         )
     }
     async fn products(&self, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -124,7 +133,7 @@ impl ShopCore {
             .fetch_all(&self.context.pool)
             .await
             .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
-        ok(Value::Array(rows.into_iter().map(|r|json!({"id":r.get::<i32,_>("id"),"sku":r.get::<Option<String>,_>("sku"),"name":r.get::<Option<String>,_>("name"),"price":r.get::<Option<f64>,_>("price").unwrap_or(0.0),"stock":r.get::<Option<i32>,_>("stock").unwrap_or(0),"created_at":r.get::<Option<chrono::NaiveDateTime>,_>("created_at")})).collect()))
+        ok(Value::Array(rows.into_iter().map(|r|json!({"id":r.get::<i32,_>("id"),"sku":r.get::<Option<String>,_>("sku"),"name":r.get::<Option<String>,_>("name"),"price":r.get::<Option<f64>,_>("price").unwrap_or(0.0),"stock":r.get::<Option<i32>,_>("stock").unwrap_or(0),"created_at":legacy_datetime(r.get::<Option<chrono::NaiveDateTime>,_>("created_at"))})).collect()))
     }
     async fn bank_pay(&self, oid: i32, amount: f64) -> Result<Option<String>, ApiError> {
         for _ in 0..3 {
@@ -146,13 +155,15 @@ impl ShopCore {
         Ok(None)
     }
     async fn export(&self, filename: &str, from: &str, to: &str) -> Result<String, ApiError> {
+        let from_date = report_date(from)?;
+        let to_date = report_date(to)?;
         let safe = Path::new(filename)
             .file_name()
             .and_then(|x| x.to_str())
             .unwrap_or("sales.csv");
         fs::create_dir_all(&self.context.config.export_dir)
             .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "export error"))?;
-        let rows=sqlx::query("SELECT o.order_no,o.created_at,o.status,u.username,p.name AS product,i.quantity,i.price FROM orders o JOIN users u ON u.id=o.user_id JOIN order_items i ON i.order_id=o.id JOIN products p ON p.id=i.product_id WHERE o.created_at >= $1 AND o.created_at < $2 ORDER BY o.id").bind(from).bind(to).fetch_all(&self.context.pool).await.map_err(|_|ApiError::new(StatusCode::INTERNAL_SERVER_ERROR,"database error"))?;
+        let rows=sqlx::query("SELECT o.order_no,o.created_at,o.status,u.username,p.name AS product,i.quantity,i.price FROM orders o JOIN users u ON u.id=o.user_id JOIN order_items i ON i.order_id=o.id JOIN products p ON p.id=i.product_id WHERE o.created_at >= $1 AND o.created_at < $2 ORDER BY o.id").bind(from_date).bind(to_date).fetch_all(&self.context.pool).await.map_err(|_|ApiError::new(StatusCode::INTERNAL_SERVER_ERROR,"database error"))?;
         let mut s = "order_no,date,status,user,product,qty,price\n".to_string();
         for r in rows {
             s.push_str(&format!(
@@ -283,7 +294,7 @@ impl ShopCore {
                     return err(StatusCode::NOT_FOUND, "not found");
                 };
                 ok(
-                    json!({"id":r.get::<i32,_>("id"),"sku":r.get::<Option<String>,_>("sku"),"name":r.get::<Option<String>,_>("name"),"price":r.get::<Option<f64>,_>("price").unwrap_or(0.0),"stock":r.get::<Option<i32>,_>("stock").unwrap_or(0),"created_at":r.get::<Option<chrono::NaiveDateTime>,_>("created_at")}),
+                    json!({"id":r.get::<i32,_>("id"),"sku":r.get::<Option<String>,_>("sku"),"name":r.get::<Option<String>,_>("name"),"price":r.get::<Option<f64>,_>("price").unwrap_or(0.0),"stock":r.get::<Option<i32>,_>("stock").unwrap_or(0),"created_at":legacy_datetime(r.get::<Option<chrono::NaiveDateTime>,_>("created_at"))}),
                 )
             }
             (HttpMethod::Post, "/api/products") => {
@@ -306,7 +317,7 @@ impl ShopCore {
                 .await
                 .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
                 created(
-                    json!({"id":p.get::<i32,_>("id"),"sku":p.get::<Option<String>,_>("sku"),"name":p.get::<Option<String>,_>("name"),"price":p.get::<Option<f64>,_>("price").unwrap_or(0.0),"stock":p.get::<Option<i32>,_>("stock").unwrap_or(0),"created_at":p.get::<Option<chrono::NaiveDateTime>,_>("created_at")}),
+                    json!({"id":p.get::<i32,_>("id"),"sku":p.get::<Option<String>,_>("sku"),"name":p.get::<Option<String>,_>("name"),"price":p.get::<Option<f64>,_>("price").unwrap_or(0.0),"stock":p.get::<Option<i32>,_>("stock").unwrap_or(0),"created_at":legacy_datetime(p.get::<Option<chrono::NaiveDateTime>,_>("created_at"))}),
                 )
             }
             (HttpMethod::Put, _) if p.starts_with("/api/products/") => {
@@ -362,7 +373,7 @@ impl ShopCore {
                 .await
                 .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
                 ok(
-                    json!({"id":p.get::<i32,_>("id"),"sku":p.get::<Option<String>,_>("sku"),"name":p.get::<Option<String>,_>("name"),"price":p.get::<Option<f64>,_>("price").unwrap_or(0.0),"stock":p.get::<Option<i32>,_>("stock").unwrap_or(0),"created_at":p.get::<Option<chrono::NaiveDateTime>,_>("created_at")}),
+                    json!({"id":p.get::<i32,_>("id"),"sku":p.get::<Option<String>,_>("sku"),"name":p.get::<Option<String>,_>("name"),"price":p.get::<Option<f64>,_>("price").unwrap_or(0.0),"stock":p.get::<Option<i32>,_>("stock").unwrap_or(0),"created_at":legacy_datetime(p.get::<Option<chrono::NaiveDateTime>,_>("created_at"))}),
                 )
             }
             (HttpMethod::Post, "/api/orders") => self.create_order(req).await,
@@ -472,7 +483,7 @@ impl ShopCore {
             (HttpMethod::Get, "/api/admin/users") => {
                 let _ = self.admin(&req).await?;
                 let rows=sqlx::query("SELECT id,username,email,name,role,wallet_balance,password_hash,created_at FROM users ORDER BY id").fetch_all(&self.context.pool).await.map_err(|_|ApiError::new(StatusCode::INTERNAL_SERVER_ERROR,"database error"))?;
-                ok(json!(rows.into_iter().map(|r|json!({"id":r.get::<i32,_>("id"),"username":r.get::<Option<String>,_>("username"),"email":r.get::<Option<String>,_>("email"),"name":r.get::<Option<String>,_>("name"),"role":r.get::<Option<String>,_>("role"),"wallet_balance":r.get::<Option<f64>,_>("wallet_balance").unwrap_or(0.0),"password_hash":r.get::<Option<String>,_>("password_hash"),"created_at":r.get::<Option<chrono::NaiveDateTime>,_>("created_at")})).collect::<Vec<_>>()))
+                ok(json!(rows.into_iter().map(|r|json!({"id":r.get::<i32,_>("id"),"username":r.get::<Option<String>,_>("username"),"email":r.get::<Option<String>,_>("email"),"name":r.get::<Option<String>,_>("name"),"role":r.get::<Option<String>,_>("role"),"wallet_balance":r.get::<Option<f64>,_>("wallet_balance").unwrap_or(0.0),"password_hash":r.get::<Option<String>,_>("password_hash"),"created_at":legacy_datetime(r.get::<Option<chrono::NaiveDateTime>,_>("created_at"))})).collect::<Vec<_>>()))
             }
             (HttpMethod::Post, _) if p.starts_with("/api/admin/users/") => {
                 let _ = self.admin(&req).await?;
@@ -689,7 +700,7 @@ impl ShopCore {
             return err(StatusCode::NOT_FOUND, "not found");
         }
         if o.get::<String, _>("status") != "pending" {
-            return err(StatusCode::CONFLICT, "order already paid");
+            return err(StatusCode::CONFLICT, "order not payable");
         }
         let method = text(req.body.get("method"));
         if method == "wallet" {
@@ -705,7 +716,7 @@ impl ShopCore {
             .await
             .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
             if bal < o.get("total") {
-                return err(StatusCode::PAYMENT_REQUIRED, "insufficient balance");
+                return err(StatusCode::PAYMENT_REQUIRED, "insufficient wallet balance");
             }
             sqlx::query("UPDATE users SET wallet_balance=wallet_balance-$1 WHERE id=$2")
                 .bind(o.get::<f64, _>("total"))
@@ -845,13 +856,18 @@ impl ShopCore {
             "user" => "o.user_id::text",
             _ => "date(o.created_at)::text",
         };
+        let from_date = report_date(from)?;
+        let to_date = report_date(to)?;
         let sql=format!("SELECT {} bucket,COUNT(*) orders,COALESCE(SUM(o.total),0) revenue FROM orders o WHERE o.created_at >= $1 AND o.created_at < $2 GROUP BY {} ORDER BY 1",col,col);
         let rows = sqlx::query(&sql)
-            .bind(from)
-            .bind(to)
+            .bind(from_date)
+            .bind(to_date)
             .fetch_all(&self.context.pool)
             .await
-            .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+            .map_err(|error| {
+                tracing::error!(?error, "sales report grouping query failed");
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+            })?;
         let top_rows = sqlx::query(
             "SELECT p.name, COALESCE(SUM(i.price * i.quantity), 0) AS revenue
              FROM orders o
@@ -861,11 +877,14 @@ impl ShopCore {
                AND o.status IN ('paid', 'shipped')
              GROUP BY p.name ORDER BY revenue DESC LIMIT 10",
         )
-        .bind(from)
-        .bind(to)
+        .bind(from_date)
+        .bind(to_date)
         .fetch_all(&self.context.pool)
         .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|error| {
+            tracing::error!(?error, "sales report top-products query failed");
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        })?;
         let top_products = top_rows
             .into_iter()
             .map(|r| json!({"name": r.get::<String, _>("name"), "revenue": r.get::<f64, _>("revenue")}))

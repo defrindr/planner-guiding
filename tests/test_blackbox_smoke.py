@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 import uuid
 
@@ -70,15 +71,20 @@ def test_health_and_auth_contract():
 def test_products_and_order_wallet_lifecycle():
     user = new_user()
     product = first_product()
+    assert re.fullmatch(r"[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT", product["created_at"])
     response = api("POST", "/api/orders", user["token"], json={"items": [{"product_id": product["id"], "quantity": 1}]})
     assert response.status_code == 201, response.text
     order = response.json()
     assert order["status"] == "pending"
-    assert api("POST", f"/api/orders/{order['id']}/pay", user["token"], json={"method": "wallet"}).status_code == 402
+    insufficient = api("POST", f"/api/orders/{order['id']}/pay", user["token"], json={"method": "wallet"})
+    assert insufficient.status_code == 402
+    assert insufficient.json() == {"error": "insufficient wallet balance"}
     assert api("POST", "/api/wallet/topup", user["token"], json={"amount": 500}).status_code == 200
     response = api("POST", f"/api/orders/{order['id']}/pay", user["token"], json={"method": "wallet"})
     assert response.status_code == 200 and response.json()["status"] == "paid"
-    assert api("POST", f"/api/orders/{order['id']}/pay", user["token"], json={"method": "wallet"}).status_code == 409
+    repeated = api("POST", f"/api/orders/{order['id']}/pay", user["token"], json={"method": "wallet"})
+    assert repeated.status_code == 409
+    assert repeated.json() == {"error": "order not payable"}
 
 
 def test_bank_payment_settles_and_webhook_signature_is_checked():
