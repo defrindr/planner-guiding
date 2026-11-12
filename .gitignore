@@ -1,0 +1,41 @@
+# OS/editor files
+.DS_Store
+.AppleDouble
+.LSOverride
+.idea/
+.vscode/*
+!.vscode/settings.json
+*.swp
+*.swo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies and build output
+node_modules/
+vendor/
+dist/
+build/
+coverage/
+.cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime data and logs
+*.log
+logs/
+tmp/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Local tooling
+*.local
+
