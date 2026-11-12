@@ -42,6 +42,32 @@ pub(crate) fn report_date(value: &str) -> Result<chrono::NaiveDate, ApiError> {
 }
 
 impl ShopCore {
+    pub(crate) fn notify_order(
+        &self,
+        notify_url: Option<&str>,
+        order_id: i32,
+        order_no: i32,
+        status: &str,
+    ) {
+        let Some(url) = notify_url.filter(|url| !url.is_empty()) else {
+            return;
+        };
+        let client = self.context.http_client.clone();
+        let url = url.to_owned();
+        let status = status.to_owned();
+        tokio::spawn(async move {
+            let _ = client
+                .post(url)
+                .json(&json!({
+                    "order_id": order_id,
+                    "order_no": order_no,
+                    "status": status
+                }))
+                .send()
+                .await;
+        });
+    }
+
     pub(crate) async fn actor(&self, req: &ApiRequest) -> Result<(i32, Value), ApiError> {
         let token = req.bearer.as_deref().ok_or_else(ApiError::unauthorized)?;
         let uid = repository::sessions()

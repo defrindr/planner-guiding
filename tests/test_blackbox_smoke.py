@@ -9,8 +9,10 @@ import hmac
 import json
 import os
 import re
+import threading
 import time
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import requests
@@ -18,6 +20,7 @@ import requests
 BASE = os.environ.get("BASE_URL", "http://localhost:8000").rstrip("/")
 BANK = os.environ.get("BANK_URL", "http://localhost:5001").rstrip("/")
 TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "5"))
+NOTIFY_HOST = os.environ.get("NOTIFY_HOST", "host.docker.internal")
 
 
 def api(method, path, token=None, **kwargs):
@@ -339,3 +342,148 @@ def test_invoice_and_profile_update():
     assert patched.status_code == 200, patched.text
     assert patched.json()["name"] == name
     assert api("GET", "/api/users/me", user["token"]).json()["name"] == name
+
+
+def test_error_responses_for_invalid_routes_paths_and_methods_are_json():
+    user = new_user()
+    for path in ("/api/nope", "/api/products/abc"):
+        response = api("GET", path)
+        assert response.status_code in (400, 404), response.text
+        assert response.headers["content-type"].startswith("application/json")
+        assert isinstance(response.json().get("error"), str)
+
+    unauth = api("GET", "/api/orders/abc")
+    assert unauth.status_code == 401
+    assert unauth.headers["content-type"].startswith("application/json")
+
+    invalid_id = api("GET", "/api/orders/abc", user["token"])
+    assert invalid_id.status_code == 404
+    assert invalid_id.headers["content-type"].startswith("application/json")
+    assert invalid_id.json() == {"error": "not found"}
+
+    wrong_method = api("PUT", "/health")
+    assert wrong_method.status_code == 405
+    assert wrong_method.headers["content-type"].startswith("application/json")
+    assert isinstance(wrong_method.json().get("error"), str)
+
+
+def test_products_can_sort_by_sku():
+    response = api("GET", "/api/products?sort=sku&limit=100")
+    assert response.status_code == 200, response.text
+    skus = [product["sku"] for product in response.json() if product.get("sku") is not None]
+    assert skus == sorted(skus)
+
+
+def test_pay_method_defaults_to_wallet_and_unknown_is_rejected():
+    user = new_user()
+    product = first_product()
+    assert api("POST", "/api/wallet/topup", user["token"], json={"amount": 1000}).status_code == 200
+
+    order = api("POST", "/api/orders", user["token"], json={
+        "items": [{"product_id": product["id"], "quantity": 1}],
+    }).json()
+    paid = api("POST", f"/api/orders/{order['id']}/pay", user["token"], json={})
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["method"] == "wallet"
+
+    other = api("POST", "/api/orders", user["token"], json={
+        "items": [{"product_id": product["id"], "quantity": 1}],
+    }).json()
+    unknown = api("POST", f"/api/orders/{other['id']}/pay", user["token"], json={"method": "cash"})
+    assert unknown.status_code == 400
+    assert unknown.json() == {"error": "unknown method"}
+    assert api("GET", f"/api/orders/{other['id']}", user["token"]).json()["status"] == "pending"
+
+
+class _NotifyHandler(BaseHTTPRequestHandler):
+    payloads = []
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length) or b"{}")
+        self.__class__.payloads.append(payload)
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+def wait_until(predicate, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_notify_url_receives_pending_and_paid():
+    handler = type("NotifyHandler", (_NotifyHandler,), {"payloads": []})
+    server = ThreadingHTTPServer(("0.0.0.0", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://{NOTIFY_HOST}:{server.server_address[1]}/notify"
+        user = new_user()
+        product = first_product()
+        assert api("POST", "/api/wallet/topup", user["token"], json={"amount": 1000}).status_code == 200
+        response = api("POST", "/api/orders", user["token"], json={
+            "items": [{"product_id": product["id"], "quantity": 1}],
+            "notify_url": url,
+        })
+        assert response.status_code == 201, response.text
+        order = response.json()
+
+        assert wait_until(lambda: any(
+            payload.get("order_id") == order["id"] and payload.get("status") == "pending"
+            for payload in handler.payloads
+        )), handler.payloads
+
+        paid = api("POST", f"/api/orders/{order['id']}/pay", user["token"], json={"method": "wallet"})
+        assert paid.status_code == 200, paid.text
+        assert wait_until(lambda: any(
+            payload.get("order_id") == order["id"] and payload.get("status") == "paid"
+            for payload in handler.payloads
+        )), handler.payloads
+
+        for payload in handler.payloads:
+            assert payload["order_no"] == order["order_no"]
+            assert set(payload) >= {"order_id", "order_no", "status"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_order_read_cancel_and_refund_follow_legacy_ownership():
+    owner = new_user()
+    other = new_user()
+    product = first_product()
+    order = api("POST", "/api/orders", owner["token"], json={
+        "items": [{"product_id": product["id"], "quantity": 1}],
+    }).json()
+
+    fetched = api("GET", f"/api/orders/{order['id']}", other["token"])
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["id"] == order["id"]
+
+    payment = api("POST", f"/api/orders/{order['id']}/pay", other["token"], json={"method": "wallet"})
+    assert payment.status_code == 404
+
+    cancelled = api("POST", f"/api/orders/{order['id']}/cancel", other["token"])
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+
+    assert api("POST", "/api/wallet/topup", owner["token"], json={"amount": 1000}).status_code == 200
+    refundable = api("POST", "/api/orders", owner["token"], json={
+        "items": [{"product_id": product["id"], "quantity": 1}],
+    }).json()
+    assert api("POST", f"/api/orders/{refundable['id']}/pay", owner["token"], json={"method": "wallet"}).status_code == 200
+    before = api("GET", "/api/wallet", owner["token"]).json()["balance"]
+
+    refunded = api("POST", f"/api/orders/{refundable['id']}/refund", other["token"], json={"amount": 5})
+    assert refunded.status_code == 200, refunded.text
+    assert refunded.json()["status"] == "refunded"
+    assert refunded.json()["refunded"] == 5
+    assert api("GET", "/api/wallet", owner["token"]).json()["balance"] == before + 5

@@ -14,6 +14,7 @@ impl ShopCore {
         let sort = match req.query.get("sort").map(String::as_str) {
             Some("price") => ProductSort::Price,
             Some("name") => ProductSort::Name,
+            Some("sku") => ProductSort::Sku,
             Some("stock") => ProductSort::Stock,
             _ => ProductSort::Id,
         };

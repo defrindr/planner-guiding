@@ -50,11 +50,24 @@ pub fn router<C: HttpCore>(core: HttpState<C>) -> Router {
         .route("/api/admin/users/:id/role", post(set_role::<C>))
         .route("/api/admin/orders/:id/status", post(set_order_status::<C>))
         .route("/api/webhooks/bank", post(bank_webhook::<C>))
+        .fallback(not_found)
+        .method_not_allowed_fallback(method_not_allowed)
         .with_state(core)
 }
 
 async fn health() -> Json<Value> {
     Json(json!({"status":"ok"}))
+}
+
+async fn not_found() -> ApiError {
+    ApiError::new(axum::http::StatusCode::NOT_FOUND, "not found")
+}
+
+async fn method_not_allowed() -> ApiError {
+    ApiError::new(
+        axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        "method not allowed",
+    )
 }
 
 fn protected(path: &str) -> bool {
@@ -164,7 +177,7 @@ macro_rules! json_handler {
 macro_rules! json_id_handler {
     ($name:ident, $method:ident, $path:expr) => {
         async fn $name<C: HttpCore>(
-            Path(id): Path<u64>,
+            Path(id): Path<String>,
             State(state): State<HttpState<C>>,
             Query(query): Query<BTreeMap<String, String>>,
             headers: HeaderMap,

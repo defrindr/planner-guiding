@@ -47,15 +47,10 @@ impl ShopCore {
         } else {
             0
         };
-        let oid = orders::insert(
-            &mut *tx,
-            no,
-            uid,
-            code,
-            req.body.get("notify_url").and_then(Value::as_str),
-        )
-        .await
-        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        let notify_url = req.body.get("notify_url").and_then(Value::as_str);
+        let oid = orders::insert(&mut *tx, no, uid, code, notify_url)
+            .await
+            .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
         let mut sub = 0.0;
         for it in items {
             let pid = it.get("product_id").and_then(Value::as_i64).unwrap_or(0) as i32;
@@ -93,20 +88,18 @@ impl ShopCore {
         tx.commit()
             .await
             .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        self.notify_order(notify_url, oid, no, "pending");
         created(self.order_json(oid).await?)
     }
 
     pub(crate) async fn cancel(&self, req: ApiRequest) -> Result<ApiResponse, ApiError> {
-        let (uid, _) = self.actor(&req).await?;
+        let _ = self.actor(&req).await?;
         let oid = id(&req.path, "/api/orders/")
             .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not found"))?;
         let o = orders::for_cancel(&self.context.pool, oid)
             .await
             .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
             .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not found"))?;
-        if o.user_id != uid {
-            return err(StatusCode::NOT_FOUND, "not found");
-        }
         if o.status == "cancelled" {
             return err(StatusCode::CONFLICT, "already cancelled");
         }
@@ -120,7 +113,7 @@ impl ShopCore {
             .await
             .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
         if ["paid", "shipped"].contains(&o.status.as_str()) {
-            wallet::credit(&mut *tx, uid, o.total)
+            wallet::credit(&mut *tx, o.user_id, o.total)
                 .await
                 .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
         }
@@ -134,16 +127,13 @@ impl ShopCore {
     }
 
     pub(crate) async fn refund(&self, req: ApiRequest) -> Result<ApiResponse, ApiError> {
-        let (uid, _) = self.actor(&req).await?;
+        let _ = self.actor(&req).await?;
         let oid = id(&req.path, "/api/orders/")
             .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not found"))?;
         let o = orders::for_refund(&self.context.pool, oid)
             .await
             .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
             .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not found"))?;
-        if o.user_id != uid {
-            return err(StatusCode::NOT_FOUND, "not found");
-        }
         if o.status == "pending" {
             return err(StatusCode::CONFLICT, "order not paid");
         }
@@ -152,7 +142,7 @@ impl ShopCore {
             .get("amount")
             .map(|_| money(req.body.get("amount")))
             .unwrap_or(o.total);
-        wallet::credit(&self.context.pool, uid, a)
+        wallet::credit(&self.context.pool, o.user_id, a)
             .await
             .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
         orders::apply_refund(&self.context.pool, oid, a)

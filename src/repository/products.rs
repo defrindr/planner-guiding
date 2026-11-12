@@ -29,6 +29,7 @@ pub enum ProductSort {
     Id,
     Price,
     Name,
+    Sku,
     Stock,
 }
 
@@ -38,6 +39,7 @@ impl ProductSort {
             Self::Id => "id",
             Self::Price => "price",
             Self::Name => "name",
+            Self::Sku => "sku",
             Self::Stock => "stock",
         }
     }

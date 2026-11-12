@@ -28,6 +28,8 @@ pub struct OrderForPayment {
     pub user_id: i32,
     pub status: String,
     pub total: f64,
+    pub order_no: i32,
+    pub notify_url: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -186,10 +188,12 @@ pub async fn for_payment<'e, E>(executor: E, order_id: i32) -> sqlx::Result<Opti
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
-    sqlx::query_as::<_, OrderForPayment>("SELECT user_id,status,total FROM orders WHERE id=$1")
-        .bind(order_id)
-        .fetch_optional(executor)
-        .await
+    sqlx::query_as::<_, OrderForPayment>(
+        "SELECT user_id,status,total,order_no,notify_url FROM orders WHERE id=$1",
+    )
+    .bind(order_id)
+    .fetch_optional(executor)
+    .await
 }
 
 pub async fn for_cancel<'e, E>(executor: E, order_id: i32) -> sqlx::Result<Option<OrderForCancel>>

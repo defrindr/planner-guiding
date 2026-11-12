@@ -1,8 +1,4 @@
-use super::{
-    err, ok,
-    shared::{id, text},
-    ShopCore,
-};
+use super::{err, ok, shared::id, ShopCore};
 use crate::http::{ApiError, ApiRequest, ApiResponse};
 use crate::repository::{orders, payments, wallet};
 use axum::http::StatusCode;
@@ -43,7 +39,11 @@ impl ShopCore {
         if o.status != "pending" {
             return err(StatusCode::CONFLICT, "order not payable");
         }
-        let method = text(req.body.get("method"));
+        let method = req
+            .body
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("wallet");
         if method == "wallet" {
             let mut tx =
                 self.context.pool.begin().await.map_err(|_| {
@@ -64,12 +64,16 @@ impl ShopCore {
             tx.commit()
                 .await
                 .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+            self.notify_order(o.notify_url.as_deref(), oid, o.order_no, "paid");
             return ok(json!({
                 "order_id": oid,
                 "status": "paid",
                 "method": "wallet",
                 "bank_ref": Value::Null
             }));
+        }
+        if method != "bank" {
+            return err(StatusCode::BAD_REQUEST, "unknown method");
         }
         let Some(r) = self.bank_pay(oid, o.total).await? else {
             return err(StatusCode::BAD_GATEWAY, "payment failed");
@@ -80,6 +84,7 @@ impl ShopCore {
         orders::mark_paid(&self.context.pool, oid)
             .await
             .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        self.notify_order(o.notify_url.as_deref(), oid, o.order_no, "paid");
         ok(json!({"order_id":oid,"status":"paid","method":"bank","bank_ref":r}))
     }
 }

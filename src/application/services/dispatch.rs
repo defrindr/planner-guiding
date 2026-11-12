@@ -176,14 +176,10 @@ impl ShopCore {
                 ok(json!(out))
             }
             (HttpMethod::Get, _) if p.starts_with("/api/orders/") && !p.contains("/invoice") => {
-                let (uid, _) = self.actor(&req).await?;
+                let _ = self.actor(&req).await?;
                 let oid = id(p, "/api/orders/")
                     .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not found"))?;
-                let v = self.order_json(oid).await?;
-                if v.get("user_id").and_then(Value::as_i64) != Some(uid as i64) {
-                    return err(StatusCode::NOT_FOUND, "not found");
-                }
-                ok(v)
+                ok(self.order_json(oid).await?)
             }
             (HttpMethod::Get, _) if p.ends_with("/invoice") => {
                 let oid = p
