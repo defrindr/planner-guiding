@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust fmt, clippy, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.85
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+  compose-smoke:
+    name: Clean compose build, HTTP black-box, maintenance commands
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify Docker Compose
+        run: docker compose version
+
+      - name: Build and test from a clean copy without legacy/
+        env:
+          COMPOSE_PROJECT_NAME: shopcore-ci
+          APP_PORT: "8000"
+          BANK_PORT: "5001"
+        run: |
+          mkdir -p /tmp/shopcore-ci
+          rsync -a \
+            --exclude .git \
+            --exclude target \
+            --exclude legacy \
+            --exclude data \
+            --exclude .superpowers \
+            --exclude tests/__pycache__ \
+            --exclude '*.log' \
+            ./ /tmp/shopcore-ci/
+          cd /tmp/shopcore-ci
+          docker compose config -q
+          ./scripts/test-compose.sh

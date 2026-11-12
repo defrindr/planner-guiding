@@ -182,3 +182,17 @@ where
             .is_some(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn product_sort_maps_to_whitelisted_sql_columns() {
+        assert_eq!(ProductSort::Id.as_sql(), "id");
+        assert_eq!(ProductSort::Price.as_sql(), "price");
+        assert_eq!(ProductSort::Name.as_sql(), "name");
+        assert_eq!(ProductSort::Sku.as_sql(), "sku");
+        assert_eq!(ProductSort::Stock.as_sql(), "stock");
+    }
+}

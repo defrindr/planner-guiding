@@ -43,6 +43,8 @@ services:
       PORT: 8000
       EXPORT_DIR: /tmp/exports
     command: ["shopcore init-db && shopcore seed && exec shopcore serve"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
