@@ -74,27 +74,96 @@ impl SessionStore {
 mod tests {
     use super::*;
 
+    fn signature(secret: &str, body: &[u8]) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
     #[test]
-    fn legacy_password_and_total_are_stable() {
+    fn legacy_password_is_stable_and_input_sensitive() {
         assert_eq!(
             hash_password("admin123"),
             "0192023a7bbd73250516f069df18b500"
         );
-        assert_eq!(calculate_total(100.0, 10), 90.0);
+        assert_eq!(hash_password(""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_ne!(hash_password("admin123"), hash_password("admin124"));
     }
 
     #[test]
-    fn webhook_signature_accepts_hex_hmac_only() {
+    fn make_token_is_deterministic_and_time_sensitive() {
+        let first = make_token("alice", 1_700_000_000);
+        assert_eq!(first, make_token("alice", 1_700_000_000));
+        assert_ne!(first, make_token("alice", 1_700_000_001));
+        assert_ne!(first, make_token("bob", 1_700_000_000));
+        assert_eq!(first.len(), 32);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn calculate_total_applies_percent_and_rounds_cents() {
+        assert_eq!(calculate_total(100.0, 0), 100.0);
+        assert_eq!(calculate_total(100.0, 10), 90.0);
+        assert_eq!(calculate_total(50.0, 50), 25.0);
+        assert_eq!(calculate_total(50.0, 100), 0.0);
+        assert_eq!(calculate_total(50.0, 200), -50.0);
+        let discounted = calculate_total(89.99 * 2.0, 10);
+        assert!((discounted - 161.98).abs() < 1e-9);
+    }
+
+    #[test]
+    fn line_total_multiplies_price_and_quantity() {
+        assert_eq!(line_total(12.5, 3), 37.5);
+        assert_eq!(line_total(12.5, 0), 0.0);
+        assert_eq!(line_total(10.0, -2), -20.0);
+    }
+
+    #[test]
+    fn webhook_signature_accepts_valid_and_uppercase_hex() {
         let body = br#"{"status":"settled"}"#;
-        let mut mac = HmacSha256::new_from_slice(b"secret").unwrap();
-        mac.update(body);
-        let signature = mac
-            .finalize()
-            .into_bytes()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
-        assert!(verify_webhook_signature("secret", body, &signature));
+        let expected = signature("secret", body);
+        assert!(verify_webhook_signature("secret", body, &expected));
+        assert!(verify_webhook_signature(
+            "secret",
+            body,
+            &expected.to_uppercase()
+        ));
+    }
+
+    #[test]
+    fn webhook_signature_rejects_wrong_secret_or_body() {
+        let body = br#"{"status":"settled"}"#;
+        let expected = signature("secret", body);
+        assert!(!verify_webhook_signature("other", body, &expected));
+        assert!(!verify_webhook_signature(
+            "secret",
+            br#"{"status":"failed"}"#,
+            &expected
+        ));
+    }
+
+    #[test]
+    fn webhook_signature_rejects_malformed_or_empty_hex() {
+        let body = br#"{"status":"settled"}"#;
         assert!(!verify_webhook_signature("secret", body, "not-hex"));
+        assert!(!verify_webhook_signature("secret", body, "0"));
+        assert!(!verify_webhook_signature("secret", body, "zz"));
+        assert!(!verify_webhook_signature("secret", body, ""));
+    }
+
+    #[test]
+    fn session_store_inserts_looks_up_and_clears() {
+        let mut sessions = SessionStore::default();
+        assert_eq!(sessions.user_id("token"), None);
+        sessions.insert("token".into(), 7);
+        assert_eq!(sessions.user_id("token"), Some(7));
+        sessions.insert("token".into(), 9);
+        assert_eq!(sessions.user_id("token"), Some(9));
+        sessions.clear();
+        assert_eq!(sessions.user_id("token"), None);
     }
 }

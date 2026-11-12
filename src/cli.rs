@@ -116,3 +116,59 @@ async fn serve(config: &Config) -> Result<()> {
     axum::serve(listener, app).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parses_every_supported_subcommand() {
+        assert!(matches!(
+            Cli::try_parse_from(["shopcore", "init-db"])
+                .unwrap()
+                .command,
+            Some(Command::InitDb)
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["shopcore", "seed"]).unwrap().command,
+            Some(Command::Seed)
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["shopcore", "serve"]).unwrap().command,
+            Some(Command::Serve)
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["shopcore", "purge-sessions"])
+                .unwrap()
+                .command,
+            Some(Command::PurgeSessions)
+        ));
+        match Cli::try_parse_from(["shopcore", "import-products", "products.csv"])
+            .unwrap()
+            .command
+        {
+            Some(Command::ImportProducts { path }) => assert_eq!(path, "products.csv"),
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match Cli::try_parse_from(["shopcore", "export-sales", "sales.csv"])
+            .unwrap()
+            .command
+        {
+            Some(Command::ExportSales { path }) => assert_eq!(path, "sales.csv"),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn defaults_to_serve_when_no_subcommand_is_given() {
+        assert!(Cli::try_parse_from(["shopcore"]).unwrap().command.is_none());
+    }
+
+    #[test]
+    fn rejects_unknown_commands_and_missing_paths() {
+        assert!(Cli::try_parse_from(["shopcore", "unknown-command"]).is_err());
+        assert!(Cli::try_parse_from(["shopcore", "import-products"]).is_err());
+        assert!(Cli::try_parse_from(["shopcore", "export-sales"]).is_err());
+    }
+}

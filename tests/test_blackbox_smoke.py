@@ -487,3 +487,237 @@ def test_order_read_cancel_and_refund_follow_legacy_ownership():
     assert refunded.json()["status"] == "refunded"
     assert refunded.json()["refunded"] == 5
     assert api("GET", "/api/wallet", owner["token"]).json()["balance"] == before + 5
+
+
+def test_protected_endpoints_reject_missing_and_invalid_tokens():
+    cases = [
+        ("GET", "/api/users/me"),
+        ("GET", "/api/orders"),
+        ("GET", "/api/wallet"),
+        ("POST", "/api/logout"),
+        ("GET", "/api/reports/sales"),
+        ("GET", "/api/admin/users"),
+    ]
+    for method, path in cases:
+        for token in (None, "invalid-token"):
+            response = api(method, path, token)
+            assert response.status_code == 401, (method, path, token, response.text)
+            assert response.headers["content-type"].startswith("application/json")
+            assert isinstance(response.json().get("error"), str)
+
+
+def test_admin_endpoints_reject_non_admin():
+    user = new_user()
+    cases = [
+        ("GET", "/api/admin/users", None),
+        ("POST", f"/api/admin/users/{user['id']}/role", {"role": "admin"}),
+        ("POST", "/api/admin/orders/1/status", {"status": "shipped"}),
+        ("GET", "/api/reports/sales", None),
+        ("POST", "/api/reports/export", {"filename": "forbidden.csv"}),
+        ("GET", "/api/reports/download?file=missing.gz", None),
+    ]
+    for method, path, payload in cases:
+        if payload is None:
+            response = api(method, path, user["token"])
+        else:
+            response = api(method, path, user["token"], json=payload)
+        assert response.status_code == 403, (method, path, response.text)
+        assert response.json() == {"error": "forbidden"}
+
+
+def test_register_and_login_negative_cases():
+    base = "neg_" + uuid.uuid4().hex[:8]
+    email = base + "@example.com"
+    for payload in (
+        {},
+        {"username": base},
+        {"username": base, "email": email},
+    ):
+        response = api("POST", "/api/register", json=payload)
+        assert response.status_code == 400, response.text
+        assert isinstance(response.json().get("error"), str)
+
+    assert api("POST", "/api/register", json={
+        "username": base, "email": email, "password": "pw12345",
+    }).status_code == 201
+
+    duplicate_user = api("POST", "/api/register", json={
+        "username": base, "email": "other_" + email, "password": "pw12345",
+    })
+    assert duplicate_user.status_code == 409
+
+    duplicate_email = api("POST", "/api/register", json={
+        "username": base + "_2", "email": email, "password": "pw12345",
+    })
+    assert duplicate_email.status_code == 409
+
+    assert api("POST", "/api/login", json={"username": base, "password": "wrong"}).status_code == 401
+    assert api("POST", "/api/login", json={}).status_code == 401
+
+
+def test_order_creation_negative_cases():
+    user = new_user()
+    product = first_product()
+    for payload in (
+        {"items": []},
+        {"items": "not-an-array"},
+    ):
+        response = api("POST", "/api/orders", user["token"], json=payload)
+        assert response.status_code == 400, response.text
+        assert isinstance(response.json().get("error"), str)
+
+    unknown_product = api("POST", "/api/orders", user["token"], json={
+        "items": [{"product_id": 99999999, "quantity": 1}],
+    })
+    assert unknown_product.status_code == 404
+    assert unknown_product.json() == {"error": "product 99999999 not found"}
+
+    insufficient = api("POST", "/api/orders", user["token"], json={
+        "items": [{"product_id": product["id"], "quantity": 999999}],
+    })
+    assert insufficient.status_code == 409
+    assert insufficient.json()["error"].startswith("insufficient stock for ")
+
+    invalid_coupon = api("POST", "/api/orders", user["token"], json={
+        "items": [{"product_id": product["id"], "quantity": 1}],
+        "coupon": "NOPE",
+    })
+    assert invalid_coupon.status_code == 400
+    assert invalid_coupon.json() == {"error": "invalid coupon"}
+
+    assert api("GET", "/api/orders/99999999", user["token"]).status_code == 404
+
+
+def test_pay_negative_cases():
+    owner = new_user()
+    other = new_user()
+    product = first_product()
+    order = api("POST", "/api/orders", owner["token"], json={
+        "items": [{"product_id": product["id"], "quantity": 1}],
+    }).json()
+
+    insufficient = api("POST", f"/api/orders/{order['id']}/pay", owner["token"], json={"method": "wallet"})
+    assert insufficient.status_code == 402
+    assert insufficient.json() == {"error": "insufficient wallet balance"}
+
+    unknown = api("POST", f"/api/orders/{order['id']}/pay", owner["token"], json={"method": "cash"})
+    assert unknown.status_code == 400
+    assert unknown.json() == {"error": "unknown method"}
+
+    cross_user = api("POST", f"/api/orders/{order['id']}/pay", other["token"], json={"method": "wallet"})
+    assert cross_user.status_code == 404
+    assert cross_user.json() == {"error": "not found"}
+
+    assert api("POST", "/api/wallet/topup", owner["token"], json={"amount": 1000}).status_code == 200
+    assert api("POST", f"/api/orders/{order['id']}/pay", owner["token"], json={"method": "wallet"}).status_code == 200
+    repeated = api("POST", f"/api/orders/{order['id']}/pay", owner["token"], json={"method": "wallet"})
+    assert repeated.status_code == 409
+    assert repeated.json() == {"error": "order not payable"}
+
+
+def test_cancel_and_refund_negative_cases():
+    user = new_user()
+    product = first_product()
+    order = api("POST", "/api/orders", user["token"], json={
+        "items": [{"product_id": product["id"], "quantity": 1}],
+    }).json()
+
+    pending_refund = api("POST", f"/api/orders/{order['id']}/refund", user["token"], json={"amount": 1})
+    assert pending_refund.status_code == 409
+    assert pending_refund.json() == {"error": "order not paid"}
+
+    assert api("POST", f"/api/orders/{order['id']}/cancel", user["token"]).status_code == 200
+    repeated = api("POST", f"/api/orders/{order['id']}/cancel", user["token"])
+    assert repeated.status_code == 409
+    assert repeated.json() == {"error": "already cancelled"}
+
+    for action in ("cancel", "refund"):
+        response = api("POST", f"/api/orders/99999999/{action}", user["token"], json={})
+        assert response.status_code == 404
+        assert response.json() == {"error": "not found"}
+
+
+def test_wallet_transfer_negative_cases():
+    source = new_user()
+    target = new_user()
+    assert api("POST", "/api/wallet/topup", source["token"], json={"amount": 10}).status_code == 200
+
+    insufficient = api("POST", "/api/wallet/transfer", source["token"], json={
+        "to_user_id": target["id"], "amount": 1000,
+    })
+    assert insufficient.status_code == 402
+    assert insufficient.json() == {"error": "insufficient balance"}
+
+    missing = api("POST", "/api/wallet/transfer", source["token"], json={
+        "to_user_id": 99999999, "amount": 1,
+    })
+    assert missing.status_code == 404
+    assert missing.json() == {"error": "recipient not found"}
+
+
+def test_admin_negative_targets_and_reports():
+    admin = admin_token()
+    missing_role = api("POST", "/api/admin/users/99999999/role", admin, json={"role": "admin"})
+    assert missing_role.status_code == 404
+    assert missing_role.json() == {"error": "not found"}
+
+    missing_status = api("POST", "/api/admin/orders/99999999/status", admin, json={"status": "shipped"})
+    assert missing_status.status_code == 404
+    assert missing_status.json() == {"error": "not found"}
+
+    invalid_date = api("GET", "/api/reports/sales?from=not-a-date", admin)
+    assert invalid_date.status_code == 400
+    assert invalid_date.json() == {"error": "invalid date"}
+
+    missing_file = api("GET", "/api/reports/download?file=definitely-missing.gz", admin)
+    assert missing_file.status_code == 404
+    assert missing_file.json() == {"error": "not found"}
+
+
+def test_product_and_invoice_negative_cases():
+    admin = admin_token()
+    user = new_user()
+
+    assert api("GET", "/api/products/99999999").status_code == 404
+    missing_update = api("PUT", "/api/products/99999999", admin, json={"price": 1})
+    assert missing_update.status_code == 404
+    assert missing_update.json() == {"error": "not found"}
+
+    forbidden_create = api("POST", "/api/products", user["token"], json={
+        "sku": "NEG-1", "name": "Negative", "price": 1, "stock": 1,
+    })
+    assert forbidden_create.status_code == 403
+
+    missing_invoice = api("GET", "/api/orders/99999999/invoice", user["token"])
+    assert missing_invoice.status_code == 404
+    assert missing_invoice.json() == {"error": "not found"}
+
+
+def test_webhook_negative_signatures():
+    body = json.dumps({"order_id": 999999, "bank_ref": "BK-neg", "status": "settled"}, separators=(",", ":")).encode()
+    cases = [
+        {},
+        {"X-Signature": "not-hex"},
+        {"X-Signature": "0"},
+        {"X-Signature": hmac.new(b"wrong-secret", body, hashlib.sha256).hexdigest()},
+    ]
+    for headers in cases:
+        response = api("POST", "/api/webhooks/bank", data=body, headers={
+            "Content-Type": "application/json", **headers,
+        })
+        assert response.status_code == 401, headers
+        assert response.json() == {"error": "bad signature"}
+
+
+def test_wrong_json_types_and_unknown_methods():
+    user = new_user()
+    assert api("POST", "/api/register", json={
+        "username": 123, "email": "types@example.com", "password": "pw",
+    }).status_code == 400
+    assert api("POST", "/api/login", json={"username": 123, "password": "pw"}).status_code == 401
+    assert api("POST", "/api/orders", user["token"], json={"items": "bad"}).status_code == 400
+
+    wrong_method = api("DELETE", "/api/products")
+    assert wrong_method.status_code == 405
+    assert wrong_method.headers["content-type"].startswith("application/json")
+    assert isinstance(wrong_method.json().get("error"), str)
